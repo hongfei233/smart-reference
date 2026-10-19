@@ -128,8 +128,8 @@
     "keybindings": [
       {
         "command": "smart-reference.findReferences",
-        "key": "shift+f12",
-        "mac": "shift+f12",
+        "key": "shift+f12 shift+f12",
+        "mac": "shift+f12 shift+f12",
         "when": "editorTextFocus && editorHasReferenceProvider"
       }
     ]

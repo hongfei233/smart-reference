@@ -18,7 +18,7 @@ export class ReferenceSession implements vscode.Disposable {
     public readonly onDidChange: vscode.Event<ReferenceSnapshot> = this.emitter.event;
     public snapshot: ReferenceSnapshot = {
         queryId: 0, mode: 'references', status: 'idle', label: '', source: '', items: [], stale: false,
-        message: '在编辑器中右键选择“查找智能引用”，或使用 Shift+F12。', warnings: [], enriching: false
+        message: '在编辑器中右键选择“查找智能引用”，或连续按两次 Shift+F12。', warnings: [], enriching: false
     };
 
     /** 订阅可能使引用位置过期的文档和文件事件。 */
