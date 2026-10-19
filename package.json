@@ -1,0 +1,160 @@
+{
+  "name": "smart-reference",
+  "displayName": "SmartReference",
+  "description": "智能引用",
+  "version": "0.0.3",
+  "publisher": "zhanghongfei",
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "smart-reference.findReferences",
+        "title": "查找智能引用",
+        "category": "SmartReference"
+      },
+      {
+        "command": "smart-reference.findTextMatches",
+        "title": "快速浏览匹配",
+        "category": "SmartReference"
+      },
+      {
+        "command": "smart-reference.show",
+        "title": "显示智能引用窗口",
+        "category": "SmartReference"
+      },
+      {
+        "command": "smart-reference.refresh",
+        "title": "重新查询引用",
+        "category": "SmartReference",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "smart-reference.clear",
+        "title": "清空引用结果",
+        "category": "SmartReference",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "smart-reference",
+          "title": "智能引用",
+          "icon": "media/references.svg"
+        }
+      ]
+    },
+    "views": {
+      "smart-reference": [
+        {
+          "id": "smart-reference.results",
+          "name": "智能引用",
+          "type": "webview",
+          "contextualTitle": "SmartReference"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "smart-reference.findReferences",
+          "when": "editorTextFocus && editorHasReferenceProvider",
+          "group": "navigation@3"
+        },
+        {
+          "command": "smart-reference.findTextMatches",
+          "when": "editorTextFocus",
+          "group": "navigation@4"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "smart-reference.refresh",
+          "when": "view == smart-reference.results",
+          "group": "navigation@1"
+        },
+        {
+          "command": "smart-reference.clear",
+          "when": "view == smart-reference.results",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SmartReference",
+      "properties": {
+        "smart-reference.quickSearch.include": {
+          "type": "string",
+          "default": "**/*.{cs,csx,shader,hlsl,cginc,compute,c,cc,cpp,cxx,h,hh,hpp,ts,tsx,js,jsx,lua,py,json,xml,uxml,uss,css,html,sql,md,txt,asmdef,asmref}",
+          "scope": "resource",
+          "description": "快速文本匹配扫描的源码文件 Glob。"
+        },
+        "smart-reference.quickSearch.exclude": {
+          "type": "string",
+          "default": "**/{Library,Temp,Logs,Build,Builds,obj,bin,node_modules,.git,.vs,.vscode-test,out,dist}/**",
+          "scope": "resource",
+          "description": "快速文本匹配排除的目录或文件 Glob，合并布尔型 files.exclude 与 search.exclude。"
+        },
+        "smart-reference.quickSearch.matchCase": {
+          "type": "boolean", "default": true, "scope": "resource",
+          "description": "快速文本匹配是否区分大小写。"
+        },
+        "smart-reference.quickSearch.wholeWord": {
+          "type": "boolean", "default": false, "scope": "resource",
+          "description": "快速文本匹配是否仅匹配完整标识符。"
+        },
+        "smart-reference.quickSearch.maxResults": {
+          "type": "integer", "default": 5000, "minimum": 1, "maximum": 50000, "scope": "resource",
+          "description": "快速文本匹配最多显示的匹配行数，达到上限时显示提示。"
+        },
+        "smart-reference.quickSearch.maxFiles": {
+          "type": "integer", "default": 20000, "minimum": 1, "maximum": 100000, "scope": "resource",
+          "description": "快速文本匹配最多扫描的文件数。"
+        },
+        "smart-reference.quickSearch.maxFileSizeMB": {
+          "type": "integer", "default": 2, "minimum": 1, "maximum": 32, "scope": "resource",
+          "description": "快速文本匹配单个文件的大小上限（MB）。"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "smart-reference.findReferences",
+        "key": "shift+f12",
+        "mac": "shift+f12",
+        "when": "editorTextFocus && editorHasReferenceProvider"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node scripts/prepare-media.cjs && tsc -p ./",
+    "watch": "node scripts/prepare-media.cjs && tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src media/referenceView.js media/syntaxHighlight.js scripts/prepare-media.cjs",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@highlightjs/cdn-assets": "11.12.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "^1.140.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}
