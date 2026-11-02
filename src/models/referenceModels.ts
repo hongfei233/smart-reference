@@ -33,6 +33,7 @@ export interface ReferenceItem {
 
 /** 保存引用跳转所需的文档版本和真实范围。 */
 export interface ReferenceRecord {
+    invalid?: boolean;
     item: ReferenceItem;
     location: vscode.Location;
     version: number;
@@ -43,6 +44,7 @@ export interface ReferenceRecord {
 
 /** 描述一次引用查询的可见状态。 */
 export interface ReferenceSnapshot {
+    preserveView?: boolean;
     queryId: number;
     mode: ReferenceSearchMode;
     status: 'idle' | 'loading' | 'ready' | 'error';

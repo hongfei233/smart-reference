@@ -60,8 +60,30 @@ export function textFingerprint(text: string, normalizeLineEndings: boolean = fa
 }
 
 /** 根据文档实例和内容指纹验证保存的位置是否仍然有效。 */
-export function documentMatches(document: vscode.TextDocument, original: { document?: vscode.TextDocument; version: number; documentHash: string; normalizeLineEndings?: boolean }): boolean {
-    return (document === original.document && document.version === original.version) || textFingerprint(document.getText(), original.normalizeLineEndings) === original.documentHash;
+export function documentMatches(document: vscode.TextDocument, original: { invalid?: boolean; document?: vscode.TextDocument; version: number; documentHash: string; normalizeLineEndings?: boolean }): boolean {
+    return !original.invalid && ((document === original.document && document.version === original.version) || textFingerprint(document.getText(), original.normalizeLineEndings) === original.documentHash);
+}
+
+/** 按编辑前坐标映射未被覆盖的引用范围。 */
+export function trackRange(range: vscode.Range, changes: readonly vscode.TextDocumentContentChangeEvent[]): vscode.Range | undefined {
+    let start: vscode.Position = range.start;
+    let end: vscode.Position = range.end;
+    for (const change of [...changes].sort((left, right): number => right.range.start.compareTo(left.range.start))) {
+        const edited: vscode.Range = change.range;
+        if (edited.start.isBefore(end) && edited.end.isAfter(start)) {
+            return undefined;
+        }
+        if (edited.end.isBeforeOrEqual(start)) {
+            const lines: string[] = change.text.split(/\r\n|\n|\r/);
+            const lineDelta: number = lines.length - 1 - (edited.end.line - edited.start.line);
+            const lastColumn: number = lines.length === 1 ? edited.start.character + lines[0].length : lines[lines.length - 1].length;
+            const move = (position: vscode.Position): vscode.Position => new vscode.Position(position.line + lineDelta,
+                position.line === edited.end.line ? lastColumn + position.character - edited.end.character : position.character);
+            start = move(start);
+            end = move(end);
+        }
+    }
+    return new vscode.Range(start, end);
 }
 
 /** 判断符号种类是否表示包含引用的类型。 */

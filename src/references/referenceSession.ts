@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ReferencePreview, ReferenceRecord, ReferenceSearchMode, ReferenceSnapshot, ReferenceTarget } from '../models/referenceModels';
-import { createRecord, documentFingerprint, documentMatches, enrichRecord, normalizeLocations, runLimited, textFingerprint } from './referenceService';
+import { createRecord, documentFingerprint, documentMatches, enrichRecord, normalizeLocations, runLimited, textFingerprint, trackRange } from './referenceService';
 import { readTextSource, searchTextMatches, TextSearchSummary, TextSource } from './textSearchService';
 
 /** 管理引用查询、文档失效和异步结果的生命周期。 */
@@ -15,6 +15,9 @@ export class ReferenceSession implements vscode.Disposable {
     private readonly referencedUris: Set<string> = new Set();
     private updateTimer: ReturnType<typeof setTimeout> | undefined;
     private textCancellation: vscode.CancellationTokenSource | undefined;
+    private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    private targetRange: vscode.Range | undefined;
+    private targetInvalid: boolean = false;
     public readonly onDidChange: vscode.Event<ReferenceSnapshot> = this.emitter.event;
     public snapshot: ReferenceSnapshot = {
         queryId: 0, mode: 'references', status: 'idle', label: '', source: '', items: [], stale: false,
@@ -27,27 +30,52 @@ export class ReferenceSession implements vscode.Disposable {
         if (this.snapshot.mode === 'text') {
             this.snapshot.message = '在编辑器中选中文本或将光标放到单词上，执行“快速浏览匹配”。';
         }
-        const watcher: vscode.FileSystemWatcher = vscode.workspace.createFileSystemWatcher('**/*', true, false, false);
+        const watcher: vscode.FileSystemWatcher = vscode.workspace.createFileSystemWatcher('**/*', false, false, false);
         this.subscriptions.push(
             watcher,
+            watcher.onDidCreate((uri: vscode.Uri): void => this.scheduleRefresh(uri)),
             watcher.onDidChange((uri: vscode.Uri): void => {
                 if (this.containsUri(uri)) {
                     this.markStale();
                 }
+                this.scheduleRefresh(uri);
             }),
             watcher.onDidDelete((uri: vscode.Uri): void => {
                 if (this.containsUri(uri, true)) {
                     this.markStale();
                 }
+                if (this.target?.uri.toString() === uri.toString()) {
+                    this.targetInvalid = true;
+                }
+                this.scheduleRefresh(uri);
             }),
             vscode.workspace.onDidChangeTextDocument((event: vscode.TextDocumentChangeEvent): void => {
-                if (event.contentChanges.length > 0 && (this.snapshot.status === 'loading' || this.containsUri(event.document.uri))) {
-                    this.markStale();
+                if (event.contentChanges.length > 0) {
+                    this.trackDocument(event);
                 }
             }),
+            vscode.workspace.onDidOpenTextDocument((document: vscode.TextDocument): void => {
+                for (const record of this.records.values()) {
+                    if (record.item.uri === document.uri.toString() && documentMatches(document, record)) {
+                        record.document = document;
+                        record.version = document.version;
+                    }
+                }
+                if (this.target?.uri.toString() === document.uri.toString() && documentMatches(document, this.target)) {
+                    this.target.document = document;
+                    this.target.version = document.version;
+                }
+            }),
+            vscode.workspace.onDidSaveTextDocument((document: vscode.TextDocument): void => this.scheduleRefresh(document.uri, true)),
             vscode.workspace.onDidRenameFiles((event: vscode.FileRenameEvent): void => {
                 if (event.files.some((file): boolean => this.containsUri(file.oldUri, true))) {
                     this.markStale();
+                }
+                if (this.target && event.files.some((file): boolean => this.target!.uri.toString().startsWith(file.oldUri.toString()))) {
+                    this.targetInvalid = true;
+                }
+                for (const file of event.files) {
+                    this.scheduleRefresh(file.newUri, true);
                 }
             }),
             vscode.workspace.onDidDeleteFiles((event: vscode.FileDeleteEvent): void => {
@@ -59,17 +87,22 @@ export class ReferenceSession implements vscode.Disposable {
     }
 
     /** 查询指定符号的引用并分阶段补充所属成员信息。 */
-    public async search(target: ReferenceTarget, mode: ReferenceSearchMode = 'references'): Promise<void> {
+    public async search(target: ReferenceTarget, mode: ReferenceSearchMode = 'references', preserveView: boolean = false): Promise<void> {
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = undefined;
         this.stopTextSearch();
         const queryId: number = this.snapshot.queryId + 1;
         this.navigationId++;
         this.target = target;
+        this.targetRange = target.document.getWordRangeAtPosition(target.document.validatePosition(target.position));
+        this.targetInvalid = false;
         this.records.clear();
         this.referencedUris.clear();
         this.referencedUris.add(target.uri.toString());
         this.snapshot = {
             queryId, mode, status: 'loading', label: target.label, source: vscode.workspace.asRelativePath(target.uri, true),
-            items: [], stale: false, message: mode === 'text' ? '正在枚举工作区源码…' : '正在查询语言服务…', warnings: [], enriching: false
+            items: preserveView ? this.snapshot.items : [], stale: false, preserveView,
+            message: mode === 'text' ? '正在枚举工作区源码…' : '正在查询语言服务…', warnings: [], enriching: false
         };
         this.saveMode(mode);
         this.publish();
@@ -162,13 +195,13 @@ export class ReferenceSession implements vscode.Disposable {
     }
 
     /** 使用保存的符号位置重新查询并阻止使用已经修改的查询起点。 */
-    public async refresh(mode: ReferenceSearchMode = this.snapshot.mode): Promise<void> {
+    public async refresh(mode: ReferenceSearchMode = this.snapshot.mode, preserveView: boolean = false): Promise<void> {
         if (!this.target) {
             return;
         }
         const target: ReferenceTarget = this.target;
         if (mode === 'text') {
-            await this.search(target, mode);
+            await this.search(target, mode, preserveView);
             return;
         }
         const queryId: number = this.snapshot.queryId;
@@ -177,13 +210,13 @@ export class ReferenceSession implements vscode.Disposable {
             if (this.disposed || this.target !== target || this.snapshot.queryId !== queryId) {
                 return;
             }
-            if (!documentMatches(document, target)) {
+            if (this.targetInvalid || !documentMatches(document, target)) {
                 this.markStale();
                 void vscode.window.showWarningMessage('查询起点所在文件已更改，请将光标放回符号上重新执行“查找智能引用”。');
                 this.publish();
                 return;
             }
-            await this.search({ ...target, document, version: document.version }, mode);
+            await this.search({ ...target, document, version: document.version }, mode, preserveView);
         } catch (error: unknown) {
             void vscode.window.showWarningMessage(`无法重新查询：${this.errorText(error)}`);
             this.publish();
@@ -204,6 +237,8 @@ export class ReferenceSession implements vscode.Disposable {
 
     /** 取消当前查询并丢弃后续到达的语言服务结果。 */
     public cancel(): void {
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = undefined;
         this.stopTextSearch();
         this.snapshot.queryId++;
         this.navigationId++;
@@ -293,6 +328,7 @@ export class ReferenceSession implements vscode.Disposable {
         this.disposed = true;
         this.stopTextSearch();
         clearTimeout(this.updateTimer);
+        clearTimeout(this.refreshTimer);
         for (const subscription of this.subscriptions) {
             subscription.dispose();
         }
@@ -301,6 +337,7 @@ export class ReferenceSession implements vscode.Disposable {
 
     /** 扫描源码文本并逐批发布匹配行而不调用引用和文档符号提供器。 */
     private async searchText(target: ReferenceTarget, current: () => boolean): Promise<void> {
+        this.snapshot.items = [];
         const cancellation: vscode.CancellationTokenSource = new vscode.CancellationTokenSource();
         this.textCancellation = cancellation;
         try {
@@ -338,6 +375,9 @@ export class ReferenceSession implements vscode.Disposable {
 
     /** 直接读取文本匹配的上下文并验证文件内容后合并该行全部命中标记。 */
     private async previewTextRecord(queryId: number, id: string, record: ReferenceRecord): Promise<ReferencePreview | undefined> {
+        if (record.invalid) {
+            return { path: record.item.path, line: record.item.line, lines: [], error: '引用已修改，请保存后等待刷新。' };
+        }
         const source: TextSource = await readTextSource(record.location.uri, 32 * 1024 * 1024);
         if (!this.getRecord(queryId, id)) {
             return undefined;
@@ -365,6 +405,106 @@ export class ReferenceSession implements vscode.Disposable {
     /** 保存工作区搜索模式且不改写用户配置文件。 */
     private saveMode(mode: ReferenceSearchMode): void {
         void this.workspaceState?.update('smart-reference.searchMode', mode).then(undefined, (): void => {});
+    }
+
+    /** 根据文本编辑同步查询起点及未被覆盖的引用位置。 */
+    private trackDocument(event: vscode.TextDocumentChangeEvent): void {
+        if (!this.target || !vscode.workspace.getWorkspaceFolder(event.document.uri)) {
+            return;
+        }
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = undefined;
+        if (this.snapshot.status === 'loading' || this.snapshot.enriching) {
+            this.stopTextSearch();
+            this.snapshot.queryId++;
+            this.snapshot.preserveView = true;
+            this.snapshot.status = 'ready';
+            this.snapshot.enriching = false;
+            this.snapshot.items = Array.from(this.records.values()).map((record): ReferenceRecord['item'] => record.item);
+        }
+        this.navigationId++;
+        const document: vscode.TextDocument = event.document;
+        const hash: string = documentFingerprint(document);
+        const normalizedHash: string = textFingerprint(document.getText(), true);
+        if (this.target.uri.toString() === document.uri.toString()) {
+            const mapped: vscode.Range | undefined = this.targetRange ? trackRange(this.targetRange, event.contentChanges) : undefined;
+            const word: vscode.Range | undefined = mapped ? document.getWordRangeAtPosition(mapped.start) : undefined;
+            if (!this.targetInvalid && mapped && this.target.document === document && this.target.version === document.version - 1
+                && word && word.start.compareTo(mapped.start) === 0 && word.end.compareTo(mapped.end) === 0
+                && document.getText(mapped) === this.target.label) {
+                this.targetRange = mapped;
+                this.target = { ...this.target, position: mapped.start, version: document.version, documentHash: hash };
+            } else {
+                this.targetInvalid = true;
+            }
+        }
+        for (const record of this.records.values()) {
+            if (record.item.uri !== document.uri.toString() || record.invalid) {
+                continue;
+            }
+            const originalRanges: vscode.Range[] = (record.item.highlightRanges ?? [{ start: record.item.highlightStart, end: record.item.highlightEnd }])
+                .map((range): vscode.Range => new vscode.Range(record.item.line - 1, range.start, record.item.line - 1, range.end));
+            const mappedRanges: (vscode.Range | undefined)[] = originalRanges.map((range): vscode.Range | undefined => trackRange(range, event.contentChanges));
+            const valid: boolean = record.document === document && record.version === document.version - 1
+                && mappedRanges.every((range, index): boolean => {
+                    if (!range || range.start.line !== mappedRanges[0]?.start.line
+                        || document.getText(range) !== record.item.text.slice(originalRanges[index].start.character, originalRanges[index].end.character)) {
+                        return false;
+                    }
+                    const word: vscode.Range | undefined = document.getWordRangeAtPosition(range.start);
+                    return this.snapshot.mode === 'text' || !word || (word.start.compareTo(range.start) === 0 && word.end.compareTo(range.end) === 0);
+                });
+            if (!valid) {
+                record.invalid = true;
+                continue;
+            }
+            const ranges: vscode.Range[] = mappedRanges as vscode.Range[];
+            const updated: ReferenceRecord = createRecord(document, new vscode.Location(document.uri, ranges[0]), record.item.id,
+                record.normalizeLineEndings ? normalizedHash : hash);
+            if (record.item.highlightRanges) {
+                updated.item.highlightRanges = ranges.map((range): { start: number; end: number } => ({ start: range.start.character, end: range.end.character }));
+            }
+            Object.assign(record.item, updated.item);
+            record.location = updated.location;
+            record.document = document;
+            record.version = document.version;
+            record.documentHash = updated.documentHash;
+        }
+        this.snapshot.stale = true;
+        this.snapshot.message = this.targetInvalid && this.snapshot.mode === 'references'
+            ? '查询符号已修改或删除，请在编辑器中重新选择符号查找。'
+            : '已同步未受影响的引用位置，保存后将自动刷新结果。';
+        this.publish();
+    }
+
+    /** 合并源码保存与磁盘变更并重新查询当前结果。 */
+    private scheduleRefresh(uri: vscode.Uri, saved: boolean = false): void {
+        if (!this.target || this.disposed || !vscode.workspace.getWorkspaceFolder(uri)) {
+            return;
+        }
+        const extension: string = this.target.uri.path.match(/\.[^/.]+$/)?.[0] ?? '';
+        if (!saved && !this.containsUri(uri) && (!extension || !uri.path.endsWith(extension))) {
+            return;
+        }
+        if (/(?:^|\/)(?:\.git|node_modules|Library|Temp|Logs|obj|bin|out|dist)(?:\/|$)/i.test(uri.path)
+            || vscode.workspace.textDocuments.some((document): boolean => document.uri.toString() === uri.toString() && document.isDirty)) {
+            return;
+        }
+        if (this.snapshot.status === 'loading' || this.snapshot.enriching) {
+            this.cancel();
+            this.snapshot.preserveView = true;
+        }
+        this.markStale();
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout((): void => {
+            this.refreshTimer = undefined;
+            if (this.targetInvalid && this.snapshot.mode === 'references') {
+                this.snapshot.message = '查询符号已修改或删除，请在编辑器中重新选择符号查找。';
+                this.publish();
+                return;
+            }
+            void this.refresh(this.snapshot.mode, true);
+        }, 600);
     }
 
     /** 返回属于当前查询的可信引用记录。 */

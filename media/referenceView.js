@@ -36,6 +36,7 @@
         'columns-toggle', 'column-menu', 'column-options', 'columns-reset', 'stripes-toggle', 'search-mode'
     ].map((id) => [id, document.getElementById(id)]));
     let snapshot = { queryId: -1, status: 'idle', items: [], label: '', warnings: [], stale: false, message: '', enriching: false };
+    let refreshView;
     let filtered = [];
     let entries = [];
     let offsets = [0];
@@ -480,6 +481,12 @@
         }
         const newQuery = next.queryId !== snapshot.queryId;
         const firstSnapshot = snapshot.queryId === -1;
+        const previousSelected = snapshot.items.find((item) => item.id === ui.selected);
+        if (newQuery) {
+            refreshView = next.preserveView ? (refreshView || {
+                selected: previousSelected, scrollTop: elements['table-scroll'].scrollTop, scrollLeft: elements['table-scroll'].scrollLeft
+            }) : undefined;
+        }
         snapshot = next;
         const isText = next.mode === 'text';
         elements['query-title'].textContent = next.label ? `“${next.label}”的${isText ? '文本匹配' : '引用'}` : '智能引用';
@@ -488,7 +495,7 @@
         elements['table-scroll'].setAttribute('aria-label', isText ? '文本匹配结果' : '引用结果');
         elements.refresh.disabled = !next.label || next.status === 'loading';
         elements.cancel.hidden = next.status !== 'loading' && !next.enriching;
-        const warnings = [...(next.stale ? [isText ? '文件已修改，文本匹配结果可能过期，请重新搜索。' : '文件已修改，结果可能过期。请重新查询；查询起点有修改时请从编辑器重新执行查找。'] : []), ...(next.warnings.length ? [next.warnings[0], ...(next.warnings.length > 1 ? [`另有 ${next.warnings.length - 1} 项搜索提示，悬停查看详情。`] : [])] : [])];
+        const warnings = [...(next.stale ? [next.message || '结果待刷新；保存后自动重新查询，已失效的引用会阻止跳转。'] : []), ...(next.warnings.length ? [next.warnings[0], ...(next.warnings.length > 1 ? [`另有 ${next.warnings.length - 1} 项搜索提示，悬停查看详情。`] : [])] : [])];
         elements.banner.hidden = warnings.length === 0;
         elements.banner.textContent = warnings.join(' ');
         elements.banner.title = next.warnings.join('\n');
@@ -497,12 +504,23 @@
             requestId++;
             elements['preview-code'].textContent = '';
             elements['preview-title'].textContent = '引用上下文';
-            if (!firstSnapshot) {
+            if (!firstSnapshot && !next.preserveView) {
                 ui.selected = '';
                 ui.collapsed.clear();
             }
         }
-        rebuildEntries(newQuery && !firstSnapshot);
+        const selectionAnchor = previousSelected || refreshView?.selected;
+        if (next.preserveView && next.status === 'ready' && selectionAnchor && !next.items.some((item) => item.id === ui.selected)) {
+            const candidates = next.items.filter((item) => item.uri === selectionAnchor.uri);
+            candidates.sort((left, right) => Math.abs(left.line - selectionAnchor.line) - Math.abs(right.line - selectionAnchor.line));
+            ui.selected = candidates[0]?.id ?? '';
+        }
+        rebuildEntries(newQuery && !firstSnapshot && !next.preserveView);
+        if (refreshView && next.status === 'ready') {
+            elements['table-scroll'].scrollTop = refreshView.scrollTop;
+            elements['table-scroll'].scrollLeft = refreshView.scrollLeft;
+            refreshView = undefined;
+        }
         if (restoring) {
             elements['table-scroll'].scrollTop = ui.scrollTop;
             elements['table-scroll'].scrollLeft = ui.scrollLeft;
@@ -511,7 +529,7 @@
         const selected = next.items.find((item) => item.id === ui.selected);
         if (selected) {
             elements['selected-path'].textContent = `${selected.path}:${selected.line}`;
-            if (ui.preview && (newQuery || firstSnapshot)) {
+            if (ui.preview && (newQuery || firstSnapshot || next.status === 'ready')) {
                 requestPreview(selected);
             }
         } else {
