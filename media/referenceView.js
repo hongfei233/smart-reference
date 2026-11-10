@@ -16,7 +16,8 @@
     const accessTypes = {
         read: { label: '读', order: 1 },
         write: { label: '写', order: 2 },
-        readWrite: { label: '读写', order: 3 }
+        readWrite: { label: '读写', order: 3 },
+        declaration: { label: '声明', order: 4 }
     };
     const legacyColumnKeys = ['text', 'file', 'line', 'column', 'workspace', 'member', 'type'];
     const legacyAccessKeys = ['read', 'write'];

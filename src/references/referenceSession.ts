@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ReferencePreview, ReferenceRecord, ReferenceSearchMode, ReferenceSnapshot, ReferenceTarget } from '../models/referenceModels';
-import { createRecord, documentFingerprint, documentMatches, enrichAccess, enrichRecord, normalizeLocations, runLimited, textFingerprint, trackRange } from './referenceService';
+import { createRecord, documentFingerprint, documentMatches, enrichAccess, enrichCSharpAccess, enrichRecord, normalizeLocations, runLimited, textFingerprint, trackRange } from './referenceService';
 import { readTextSource, searchTextMatches, TextSearchSummary, TextSource } from './textSearchService';
 
 /** 管理引用查询、文档失效和异步结果的生命周期。 */
@@ -162,7 +162,9 @@ export class ReferenceSession implements vscode.Disposable {
             if (!current()) {
                 return;
             }
-            this.snapshot.items = Array.from(this.records.values()).map((record: ReferenceRecord) => record.item)
+            const records: ReferenceRecord[] = Array.from(this.records.values());
+            enrichCSharpAccess(records);
+            this.snapshot.items = records.map((record: ReferenceRecord) => record.item)
                 .sort((left, right): number => left.path.localeCompare(right.path) || left.line - right.line || left.column - right.column);
             this.snapshot.status = 'ready';
             this.snapshot.message = this.snapshot.items.length > 0 ? '' : '未找到引用。请确认光标位于符号上，且语言服务和项目已加载。';

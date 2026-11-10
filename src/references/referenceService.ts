@@ -44,7 +44,49 @@ export function enrichAccess(records: readonly ReferenceRecord[], highlights: re
         access.set(key, previous && previous !== next ? 'readWrite' : next);
     }
     for (const record of records) {
-        record.item.access = access.get(rangeKey(record.location.range));
+        const kind: ReferenceAccess | undefined = access.get(rangeKey(record.location.range));
+        if (kind) {
+            record.item.access = kind;
+        }
+    }
+}
+
+const csharpMemberPrefix: RegExp = /^(?:\s*@?[\p{ID_Start}_][\p{ID_Continue}]*\s*\.)*\s*$/u;
+const csharpEventPrefix: RegExp = /^\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|new|unsafe|extern)\s+)*event\s+[\p{ID_Continue}@.<>?,:\[\]\s]+\s$/u;
+
+/** 在语义分类返回前识别 C# 事件及简单赋值中的明确引用。 */
+export function enrichCSharpAccess(records: readonly ReferenceRecord[]): void {
+    const uses: { record: ReferenceRecord; prefix: string; suffix: string }[] = [];
+    let isEvent: boolean = false;
+    for (const record of records) {
+        const { item, location: { range } } = record;
+        if (item.language !== 'csharp' || !range.isSingleLine || !/^@?[\p{ID_Start}_][\p{ID_Continue}]*$/u.test(item.text.slice(range.start.character, range.end.character))) {
+            continue;
+        }
+        const prefix: string = item.text.slice(0, range.start.character);
+        const suffix: string = item.text.slice(range.end.character).trimStart();
+        if (csharpEventPrefix.test(prefix) && /^(?:[;{,=]|$)/.test(suffix)) {
+            item.access = 'declaration';
+            isEvent = true;
+        } else {
+            uses.push({ record, prefix, suffix });
+        }
+    }
+    for (const { record, prefix, suffix } of uses) {
+        if (isEvent && csharpMemberPrefix.test(prefix)) {
+            if (/^[+-]=/.test(suffix)) {
+                record.item.access = 'write';
+                continue;
+            }
+            if (/^(?:(?:\?\.|\.)\s*Invoke\s*)?\(/.test(suffix)) {
+                record.item.access = 'read';
+                continue;
+            }
+        }
+        const assignment: RegExpExecArray | null = /(?<![=!<>+*/%&|^?\-])=([^=]*)$/.exec(prefix);
+        if (assignment && suffix.startsWith(';') && csharpMemberPrefix.test(assignment[1]) && !/^\s*(?:global\s+)?using\s/.test(prefix)) {
+            record.item.access = 'read';
+        }
     }
 }
 
@@ -124,6 +166,9 @@ export function enrichRecord(record: ReferenceRecord, symbols: readonly (vscode.
             const range: vscode.Range = 'range' in symbol ? symbol.range : symbol.location.range;
             if (!range.contains(position)) {
                 continue;
+            }
+            if ('selectionRange' in symbol && symbol.selectionRange?.isEqual(record.location.range)) {
+                record.item.access ??= 'declaration';
             }
             const type: string = isType(symbol.kind) ? symbol.name : parentType;
             const member: string = isType(symbol.kind) || symbol.kind === vscode.SymbolKind.Namespace || symbol.kind === vscode.SymbolKind.Module

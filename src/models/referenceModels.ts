@@ -3,8 +3,8 @@ import * as vscode from 'vscode';
 /** 定义精确引用和快速文本匹配两种搜索模式。 */
 export type ReferenceSearchMode = 'references' | 'text';
 
-/** 表示语言服务确认的引用读写类别。 */
-export type ReferenceAccess = 'read' | 'write' | 'readWrite';
+/** 表示引用的读写或声明类别。 */
+export type ReferenceAccess = 'read' | 'write' | 'readWrite' | 'declaration';
 
 /** 保存引用查询的原始符号位置。 */
 export interface ReferenceTarget {
