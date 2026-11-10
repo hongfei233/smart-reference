@@ -2,7 +2,7 @@
   "name": "smart-reference",
   "displayName": "SmartReference",
   "description": "智能引用",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "zhanghongfei",
   "engines": {
     "vscode": "^1.140.0"

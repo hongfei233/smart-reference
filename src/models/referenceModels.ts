@@ -29,6 +29,8 @@ export interface ReferenceItem {
     highlightRanges?: { start: number; end: number }[];
     member: string;
     type: string;
+    read?: boolean;
+    write?: boolean;
 }
 
 /** 保存引用跳转所需的文档版本和真实范围。 */

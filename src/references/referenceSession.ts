@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ReferencePreview, ReferenceRecord, ReferenceSearchMode, ReferenceSnapshot, ReferenceTarget } from '../models/referenceModels';
-import { createRecord, documentFingerprint, documentMatches, enrichRecord, normalizeLocations, runLimited, textFingerprint, trackRange } from './referenceService';
+import { createRecord, documentFingerprint, documentMatches, enrichAccess, enrichRecord, normalizeLocations, runLimited, textFingerprint, trackRange } from './referenceService';
 import { readTextSource, searchTextMatches, TextSearchSummary, TextSource } from './textSearchService';
 
 /** 管理引用查询、文档失效和异步结果的生命周期。 */
@@ -145,7 +145,9 @@ export class ReferenceSession implements vscode.Disposable {
                             this.snapshot.stale = true;
                         }
                     }
-                    fileRecords.set(key, loaded);
+                    if (loaded.length > 0) {
+                        fileRecords.set(key, loaded);
+                    }
                 } catch (error: unknown) {
                     if (current()) {
                         this.snapshot.warnings.push(`${vscode.workspace.asRelativePath(entries[0].uri, true)}：${this.errorText(error)}`);
@@ -166,19 +168,25 @@ export class ReferenceSession implements vscode.Disposable {
             this.snapshot.message = this.snapshot.items.length > 0 ? '' : '未找到引用。请确认光标位于符号上，且语言服务和项目已加载。';
             this.snapshot.enriching = fileRecords.size > 0;
             this.publish();
-            await runLimited(Array.from(fileRecords.entries()), 2, current, async ([key, records]): Promise<void> => {
-                try {
-                    const symbols: (vscode.DocumentSymbol | vscode.SymbolInformation)[] | undefined = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', vscode.Uri.parse(key));
-                    if (!current()) {
-                        return;
-                    }
-                    for (const record of records) {
-                        enrichRecord(record, symbols ?? []);
-                    }
-                    this.publishLater();
-                } catch {
-                    // 所属成员属于可选信息，语言服务不支持时保留基础引用结果。
+            await runLimited(Array.from(fileRecords.values()), 2, current, async (records): Promise<void> => {
+                const first: ReferenceRecord = records[0];
+                const { uri, range } = first.location;
+                const [symbols, highlights] = await Promise.allSettled([
+                    vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[]>('vscode.executeDocumentSymbolProvider', uri),
+                    vscode.commands.executeCommand<vscode.DocumentHighlight[]>('vscode.executeDocumentHighlights', uri, range.start)
+                ]);
+                if (!current() || first.document?.version !== first.version) {
+                    return;
                 }
+                if (symbols.status === 'fulfilled') {
+                    for (const record of records) {
+                        enrichRecord(record, symbols.value ?? []);
+                    }
+                }
+                if (highlights.status === 'fulfilled') {
+                    enrichAccess(records, highlights.value ?? []);
+                }
+                this.publishLater();
             });
             if (current()) {
                 this.snapshot.enriching = false;
@@ -442,6 +450,8 @@ export class ReferenceSession implements vscode.Disposable {
             if (record.item.uri !== document.uri.toString() || record.invalid) {
                 continue;
             }
+            record.item.read = undefined;
+            record.item.write = undefined;
             const originalRanges: vscode.Range[] = (record.item.highlightRanges ?? [{ start: record.item.highlightStart, end: record.item.highlightEnd }])
                 .map((range): vscode.Range => new vscode.Range(record.item.line - 1, range.start, record.item.line - 1, range.end));
             const mappedRanges: (vscode.Range | undefined)[] = originalRanges.map((range): vscode.Range | undefined => trackRange(range, event.contentChanges));

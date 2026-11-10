@@ -19,12 +19,36 @@ export async function runLimited<T>(items: readonly T[], concurrency: number, cu
 export function normalizeLocations(locations: readonly vscode.Location[]): vscode.Location[] {
     const unique: Map<string, vscode.Location> = new Map();
     for (const location of locations) {
-        const range: vscode.Range = location.range;
-        const key: string = `${location.uri.toString()}:${range.start.line}:${range.start.character}:${range.end.line}:${range.end.character}`;
+        const key: string = `${location.uri.toString()}:${rangeKey(location.range)}`;
         unique.set(key, location);
     }
     return Array.from(unique.values()).sort((left: vscode.Location, right: vscode.Location): number =>
         left.uri.toString().localeCompare(right.uri.toString()) || left.range.start.compareTo(right.range.start) || left.range.end.compareTo(right.range.end));
+}
+
+/** 生成可用于匹配同一文档中引用和高亮位置的范围键。 */
+function rangeKey(range: vscode.Range): string {
+    return `${range.start.line}:${range.start.character}:${range.end.line}:${range.end.character}`;
+}
+
+/** 将语言服务明确标记的读写类型匹配到同一文件的引用范围。 */
+export function enrichAccess(records: readonly ReferenceRecord[], highlights: readonly vscode.DocumentHighlight[]): void {
+    const access: Map<string, { read: boolean; write: boolean }> = new Map();
+    for (const { range, kind } of highlights) {
+        if (kind !== vscode.DocumentHighlightKind.Read && kind !== vscode.DocumentHighlightKind.Write) {
+            continue;
+        }
+        const key: string = rangeKey(range);
+        const flags: { read: boolean; write: boolean } = access.get(key) ?? { read: false, write: false };
+        flags.read ||= kind === vscode.DocumentHighlightKind.Read;
+        flags.write ||= kind === vscode.DocumentHighlightKind.Write;
+        access.set(key, flags);
+    }
+    for (const record of records) {
+        const flags = access.get(rangeKey(record.location.range));
+        record.item.read = flags?.read;
+        record.item.write = flags?.write;
+    }
 }
 
 /** 将引用位置转换成包含完整物理代码行的显示条目。 */

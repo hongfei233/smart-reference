@@ -3,8 +3,11 @@
     'use strict';
     const vscode = acquireVsCodeApi();
     const saved = vscode.getState() || {};
+    const selectionHint = '点击列标题排序 · 拖动分隔线调整列宽';
     const columns = [
         { key: 'line', label: '行', width: 48, min: 40 },
+        { key: 'read', label: '读取', width: 62, min: 54, access: true },
+        { key: 'write', label: '写入', width: 62, min: 54, access: true },
         { key: 'text', label: '代码', width: 480, min: 180 },
         { key: 'file', label: '文件', width: 145, min: 70 },
         { key: 'workspace', label: '工作区', width: 115, min: 70 },
@@ -12,7 +15,9 @@
         { key: 'type', label: '包含类型', width: 145, min: 80 }
     ];
     const legacyColumnKeys = ['text', 'file', 'line', 'column', 'workspace', 'member', 'type'];
-    const restoredColumns = columns.filter((column) => !Array.isArray(saved.visibleColumns) || saved.visibleColumns.includes(column.key)).map((column) => column.key);
+    const restoredColumns = columns.filter((column) => !Array.isArray(saved.visibleColumns) || saved.visibleColumns.includes(column.key)
+        || (column.access && saved.columnWidths?.[column.key] === undefined)).map((column) => column.key);
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const ui = {
         filter: typeof saved.filter === 'string' ? saved.filter : '',
         group: ['file', 'workspace', 'flat'].includes(saved.group) ? saved.group : 'file',
@@ -24,6 +29,8 @@
             return [column.key, Number.isFinite(width) ? Math.max(column.min, Math.min(4000, width)) : column.width];
         })),
         visibleColumns: restoredColumns.length ? restoredColumns : columns.map((column) => column.key),
+        sortKey: restoredColumns.includes(saved.sortKey) && ['ascending', 'descending'].includes(saved.sortDirection) ? saved.sortKey : '',
+        sortDirection: saved.sortDirection === 'descending' ? 'descending' : 'ascending',
         selected: typeof saved.selected === 'string' ? saved.selected : '',
         collapsed: new Set(Array.isArray(saved.collapsed) ? saved.collapsed.filter((entry) => typeof entry === 'string') : []),
         scrollTop: Number.isFinite(saved.scrollTop) ? Math.max(0, saved.scrollTop) : 0,
@@ -37,7 +44,6 @@
     ].map((id) => [id, document.getElementById(id)]));
     let snapshot = { queryId: -1, status: 'idle', items: [], label: '', warnings: [], stale: false, message: '', enriching: false };
     let refreshView;
-    let filtered = [];
     let entries = [];
     let offsets = [0];
     const heights = new Map();
@@ -132,6 +138,10 @@
                     selected.delete(column.key);
                 }
                 ui.visibleColumns = columns.filter((entry) => selected.has(entry.key)).map((entry) => entry.key);
+                if (ui.sortKey && !selected.has(ui.sortKey)) {
+                    ui.sortKey = '';
+                    rebuildEntries(true);
+                }
                 createHeader();
                 applyWidths();
                 updateColumnOptions();
@@ -164,7 +174,30 @@
             const cell = document.createElement('div');
             cell.className = 'header-cell';
             cell.setAttribute('role', 'columnheader');
-            cell.textContent = column.label;
+            const sort = document.createElement('button');
+            sort.type = 'button';
+            sort.className = 'column-sort';
+            sort.dataset.columnKey = column.key;
+            const label = document.createElement('span');
+            label.className = 'column-label';
+            label.textContent = column.label;
+            const indicator = document.createElement('span');
+            indicator.className = 'sort-indicator';
+            indicator.setAttribute('aria-hidden', 'true');
+            sort.append(label, indicator);
+            sort.addEventListener('click', () => {
+                if (ui.sortKey !== column.key) {
+                    ui.sortKey = column.key;
+                    ui.sortDirection = 'ascending';
+                } else if (ui.sortDirection === 'ascending') {
+                    ui.sortDirection = 'descending';
+                } else {
+                    ui.sortKey = '';
+                }
+                updateSortHeaders();
+                rebuildEntries(true);
+                saveState();
+            });
             const handle = document.createElement('button');
             handle.type = 'button';
             handle.className = 'column-resizer';
@@ -204,9 +237,40 @@
                 applyWidths();
                 saveState();
             });
-            cell.append(handle);
+            cell.append(sort, handle);
             elements['table-header'].append(cell);
         });
+        updateSortHeaders();
+    }
+
+    /** 更新表头的排序方向和下一次点击的提示。 */
+    function updateSortHeaders() {
+        for (const button of elements['table-header'].querySelectorAll('.column-sort')) {
+            const active = button.dataset.columnKey === ui.sortKey;
+            const ascending = ui.sortDirection === 'ascending';
+            if (active) {
+                button.parentElement.setAttribute('aria-sort', ui.sortDirection);
+            } else {
+                button.parentElement.removeAttribute('aria-sort');
+            }
+            button.querySelector('.sort-indicator').textContent = active ? (ascending ? '▲' : '▼') : '';
+            const label = button.querySelector('.column-label').textContent;
+            button.title = active ? (ascending ? `按${label}降序排序` : '取消排序，恢复默认顺序') : `按${label}升序排序`;
+        }
+    }
+
+    /** 按当前列比较引用值，并将空值保留在有值的结果之后。 */
+    function compareItems(left, right) {
+        const key = ui.sortKey;
+        const a = key === 'text' ? left.text.trimStart() : left[key];
+        const b = key === 'text' ? right.text.trimStart() : right[key];
+        const aEmpty = a === undefined || a === '';
+        const bEmpty = b === undefined || b === '';
+        if (aEmpty || bEmpty) {
+            return Number(aEmpty) - Number(bEmpty);
+        }
+        const comparison = typeof a === 'string' ? collator.compare(a, b) : Number(a) - Number(b);
+        return ui.sortDirection === 'ascending' ? comparison : -comparison;
     }
 
     /** 结束拖动并保存列宽后应用延迟到达的数据更新。 */
@@ -231,7 +295,10 @@
     /** 按筛选和分组条件建立虚拟列表条目。 */
     function rebuildEntries(resetScroll = false) {
         const query = ui.filter.trim().toLocaleLowerCase();
-        filtered = snapshot.items.filter((item) => !query || `${item.text}\n${item.file}\n${item.path}\n${item.workspace}\n${item.member}\n${item.type}`.toLocaleLowerCase().includes(query));
+        const filtered = snapshot.items.filter((item) => !query || `${item.text}\n${item.file}\n${item.path}\n${item.workspace}\n${item.member}\n${item.type}`.toLocaleLowerCase().includes(query));
+        if (ui.sortKey) {
+            filtered.sort(compareItems);
+        }
         entries = [];
         if (ui.group === 'flat') {
             entries = filtered.map((item) => ({ kind: 'reference', key: item.id, item }));
@@ -262,7 +329,7 @@
         }
         const visibleFiles = new Set(filtered.map((item) => item.uri)).size;
         const noun = snapshot.mode === 'text' ? '个匹配行' : '个引用';
-        elements.counts.textContent = snapshot.status === 'loading' ? snapshot.message : `${filtered.length} / ${snapshot.items.length} ${noun} · ${visibleFiles} 个文件${snapshot.enriching ? ' · 补充成员中…' : ''}`;
+        elements.counts.textContent = snapshot.status === 'loading' ? snapshot.message : `${filtered.length} / ${snapshot.items.length} ${noun} · ${visibleFiles} 个文件${snapshot.enriching ? ' · 补充引用信息中…' : ''}`;
         elements['table-scroll'].setAttribute('aria-rowcount', String(entries.length + 1));
         elements.empty.hidden = entries.length > 0;
         elements.empty.textContent = snapshot.status === 'loading' ? snapshot.message : (snapshot.message || (query ? '没有符合筛选条件的结果。' : '没有查询结果。'));
@@ -358,6 +425,11 @@
                         const indentation = item.text.length - text.length;
                         const ranges = item.highlightRanges?.map((range) => ({ start: Math.max(0, range.start - indentation), end: Math.max(0, range.end - indentation) }));
                         window.smartReferenceSyntax.append(cell, text, Math.max(0, item.highlightStart - indentation), Math.max(0, item.highlightEnd - indentation), item.language, item.file, ranges);
+                    } else if (column.access) {
+                        const value = item[column.key];
+                        cell.textContent = value === undefined ? '—' : (value ? '✓' : '');
+                        cell.title = value === undefined ? '读写类型未知' : (value ? column.label : `未标记为${column.label}`);
+                        cell.setAttribute('aria-label', cell.title);
                     } else {
                         cell.textContent = String(item[column.key] || '');
                         cell.title = column.key === 'file' ? item.path : cell.textContent;
@@ -418,6 +490,30 @@
             }
         }
         scheduleSave();
+    }
+
+    /** 清除当前选中行、刷新锚点及对应的上下文预览。 */
+    function deselectItem() {
+        if (!ui.selected) {
+            return;
+        }
+        ui.selected = '';
+        if (refreshView) {
+            refreshView.selected = undefined;
+        }
+        elements['selected-path'].textContent = selectionHint;
+        elements['selected-path'].removeAttribute('title');
+        resetPreview();
+        scheduleRender();
+        saveState();
+    }
+
+    /** 清空上下文预览并使尚未返回的预览请求失效。 */
+    function resetPreview() {
+        requestId++;
+        previewItemId = '';
+        elements['preview-title'].textContent = '引用上下文';
+        elements['preview-code'].textContent = '';
     }
 
     /** 请求引用上下文并记录目标以忽略迟到响应。 */
@@ -501,9 +597,7 @@
         elements.banner.title = next.warnings.join('\n');
         if (newQuery) {
             heights.clear();
-            requestId++;
-            elements['preview-code'].textContent = '';
-            elements['preview-title'].textContent = '引用上下文';
+            resetPreview();
             if (!firstSnapshot && !next.preserveView) {
                 ui.selected = '';
                 ui.collapsed.clear();
@@ -529,11 +623,13 @@
         const selected = next.items.find((item) => item.id === ui.selected);
         if (selected) {
             elements['selected-path'].textContent = `${selected.path}:${selected.line}`;
+            elements['selected-path'].title = elements['selected-path'].textContent;
             if (ui.preview && (newQuery || firstSnapshot || next.status === 'ready')) {
                 requestPreview(selected);
             }
         } else {
-            elements['selected-path'].textContent = '完整代码行 · 拖动表头分隔线调整列宽';
+            elements['selected-path'].textContent = selectionHint;
+            elements['selected-path'].removeAttribute('title');
         }
         applyPreferences();
     }
@@ -562,7 +658,7 @@
         ui.preview = !ui.preview;
         requestId++;
         applyPreferences();
-        const selected = snapshot.items.find((item) => item.id === ui.selected) || filtered[0];
+        const selected = snapshot.items.find((item) => item.id === ui.selected);
         if (ui.preview && selected) {
             selectItem(selected);
         }
@@ -574,6 +670,11 @@
         scheduleRender();
         scheduleSave();
     }, { passive: true });
+    elements['table-scroll'].addEventListener('click', (event) => {
+        if (!event.target.closest('#table-header, .reference-row, .group-row')) {
+            deselectItem();
+        }
+    });
     elements['visible-rows'].addEventListener('click', (event) => {
         const group = event.target.closest('[data-group-key]');
         if (group) {
@@ -637,9 +738,15 @@
         }
     });
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !elements['column-menu'].hidden) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+        if (!elements['column-menu'].hidden) {
             event.preventDefault();
             closeColumnMenu(true);
+        } else if (event.target.closest('#table-scroll') && ui.selected) {
+            event.preventDefault();
+            deselectItem();
         }
     });
     window.addEventListener('blur', () => { endResize(); closeColumnMenu(); saveState(); });

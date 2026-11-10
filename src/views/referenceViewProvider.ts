@@ -119,7 +119,7 @@ export class ReferenceViewProvider implements vscode.WebviewViewProvider, vscode
 <main id="results-layout"><div id="table-scroll" role="grid" aria-label="引用结果" tabindex="0"><div id="table-content"><div id="table-header" role="row"></div><div id="virtual-space"><div id="visible-rows"></div></div></div></div>
 <div id="empty" class="empty" role="status"></div>
 <aside id="preview-pane" aria-label="引用上下文" hidden><div id="preview-title" class="preview-title">引用上下文</div><pre id="preview-code"></pre></aside></main>
-<footer><span id="selected-path">完整代码行 · 拖动表头分隔线调整列宽</span><span id="hint">单击预览 · 双击或 Enter 打开</span></footer>
+<footer><span id="selected-path">点击列标题排序 · 拖动分隔线调整列宽</span><span id="hint">双击或 Enter 打开 · Esc 取消选中</span></footer>
 <div id="column-menu" role="dialog" aria-labelledby="column-menu-title" hidden><div id="column-menu-title" class="column-menu-title">显示列</div><div id="column-options"></div><button id="columns-reset" type="button">恢复默认列</button></div>
 <script nonce="${nonce}" src="${highlighter}"></script><script nonce="${nonce}" src="${syntax}"></script><script nonce="${nonce}" src="${script}"></script></body></html>`;
     }
