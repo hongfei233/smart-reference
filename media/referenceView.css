@@ -1,8 +1,8 @@
 :root {
     color-scheme: light dark;
     --row-height: 22px;
-    --columns: 48px 62px 62px 480px 145px 115px 160px 145px;
-    --table-width: 1217px;
+    --columns: 48px 74px 480px 145px 115px 160px 145px;
+    --table-width: 1167px;
     --syntax-keyword: #569cd6;
     --syntax-type: #4ec9b0;
     --syntax-string: #ce9178;

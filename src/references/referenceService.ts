@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
-import { ReferenceItem, ReferenceRecord } from '../models/referenceModels';
+import { ReferenceAccess, ReferenceItem, ReferenceRecord } from '../models/referenceModels';
 
 /** 使用有限并发处理任务并在查询失效后停止分配新任务。 */
 export async function runLimited<T>(items: readonly T[], concurrency: number, current: () => boolean, action: (item: T) => Promise<void>): Promise<void> {
@@ -33,21 +33,18 @@ function rangeKey(range: vscode.Range): string {
 
 /** 将语言服务明确标记的读写类型匹配到同一文件的引用范围。 */
 export function enrichAccess(records: readonly ReferenceRecord[], highlights: readonly vscode.DocumentHighlight[]): void {
-    const access: Map<string, { read: boolean; write: boolean }> = new Map();
+    const access: Map<string, ReferenceAccess> = new Map();
     for (const { range, kind } of highlights) {
         if (kind !== vscode.DocumentHighlightKind.Read && kind !== vscode.DocumentHighlightKind.Write) {
             continue;
         }
         const key: string = rangeKey(range);
-        const flags: { read: boolean; write: boolean } = access.get(key) ?? { read: false, write: false };
-        flags.read ||= kind === vscode.DocumentHighlightKind.Read;
-        flags.write ||= kind === vscode.DocumentHighlightKind.Write;
-        access.set(key, flags);
+        const next: ReferenceAccess = kind === vscode.DocumentHighlightKind.Read ? 'read' : 'write';
+        const previous: ReferenceAccess | undefined = access.get(key);
+        access.set(key, previous && previous !== next ? 'readWrite' : next);
     }
     for (const record of records) {
-        const flags = access.get(rangeKey(record.location.range));
-        record.item.read = flags?.read;
-        record.item.write = flags?.write;
+        record.item.access = access.get(rangeKey(record.location.range));
     }
 }
 

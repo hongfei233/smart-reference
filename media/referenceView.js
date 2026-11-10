@@ -6,17 +6,27 @@
     const selectionHint = '点击列标题排序 · 拖动分隔线调整列宽';
     const columns = [
         { key: 'line', label: '行', width: 48, min: 40 },
-        { key: 'read', label: '读取', width: 62, min: 54, access: true },
-        { key: 'write', label: '写入', width: 62, min: 54, access: true },
+        { key: 'access', label: '读写', width: 74, min: 54 },
         { key: 'text', label: '代码', width: 480, min: 180 },
         { key: 'file', label: '文件', width: 145, min: 70 },
         { key: 'workspace', label: '工作区', width: 115, min: 70 },
         { key: 'member', label: '包含成员', width: 160, min: 80 },
         { key: 'type', label: '包含类型', width: 145, min: 80 }
     ];
+    const accessTypes = {
+        read: { label: '读', order: 1 },
+        write: { label: '写', order: 2 },
+        readWrite: { label: '读写', order: 3 }
+    };
     const legacyColumnKeys = ['text', 'file', 'line', 'column', 'workspace', 'member', 'type'];
-    const restoredColumns = columns.filter((column) => !Array.isArray(saved.visibleColumns) || saved.visibleColumns.includes(column.key)
-        || (column.access && saved.columnWidths?.[column.key] === undefined)).map((column) => column.key);
+    const legacyAccessKeys = ['read', 'write'];
+    const savedColumns = Array.isArray(saved.visibleColumns) ? saved.visibleColumns : undefined;
+    const visibleLegacyAccess = legacyAccessKeys.find((key) => savedColumns?.includes(key));
+    const legacyAccessKey = visibleLegacyAccess ?? legacyAccessKeys.find((key) => Number.isFinite(saved.columnWidths?.[key]));
+    const restoredColumns = columns.filter(({ key }) => !savedColumns || savedColumns.includes(key)
+        || (key === 'access' && saved.columnWidths?.access === undefined && (!legacyAccessKey || visibleLegacyAccess))).map(({ key }) => key);
+    const savedSortKey = legacyAccessKeys.includes(saved.sortKey) ? 'access' : saved.sortKey;
+    const hasSavedSort = restoredColumns.includes(savedSortKey) && ['ascending', 'descending'].includes(saved.sortDirection);
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const ui = {
         filter: typeof saved.filter === 'string' ? saved.filter : '',
@@ -25,12 +35,13 @@
         preview: saved.preview === true,
         stripedRows: saved.stripedRows !== false,
         columnWidths: Object.fromEntries(columns.map((column) => {
-            const width = saved.columnWidths?.[column.key] ?? saved.widths?.[legacyColumnKeys.indexOf(column.key)];
+            const legacyWidth = column.key === 'access' ? saved.columnWidths?.[legacyAccessKey] : saved.widths?.[legacyColumnKeys.indexOf(column.key)];
+            const width = saved.columnWidths?.[column.key] ?? legacyWidth;
             return [column.key, Number.isFinite(width) ? Math.max(column.min, Math.min(4000, width)) : column.width];
         })),
         visibleColumns: restoredColumns.length ? restoredColumns : columns.map((column) => column.key),
-        sortKey: restoredColumns.includes(saved.sortKey) && ['ascending', 'descending'].includes(saved.sortDirection) ? saved.sortKey : '',
-        sortDirection: saved.sortDirection === 'descending' ? 'descending' : 'ascending',
+        sortKey: hasSavedSort ? savedSortKey : '',
+        sortDirection: hasSavedSort ? saved.sortDirection : '',
         selected: typeof saved.selected === 'string' ? saved.selected : '',
         collapsed: new Set(Array.isArray(saved.collapsed) ? saved.collapsed.filter((entry) => typeof entry === 'string') : []),
         scrollTop: Number.isFinite(saved.scrollTop) ? Math.max(0, saved.scrollTop) : 0,
@@ -140,6 +151,7 @@
                 ui.visibleColumns = columns.filter((entry) => selected.has(entry.key)).map((entry) => entry.key);
                 if (ui.sortKey && !selected.has(ui.sortKey)) {
                     ui.sortKey = '';
+                    ui.sortDirection = '';
                     rebuildEntries(true);
                 }
                 createHeader();
@@ -193,6 +205,7 @@
                     ui.sortDirection = 'descending';
                 } else {
                     ui.sortKey = '';
+                    ui.sortDirection = '';
                 }
                 updateSortHeaders();
                 rebuildEntries(true);
@@ -255,15 +268,23 @@
             }
             button.querySelector('.sort-indicator').textContent = active ? (ascending ? '▲' : '▼') : '';
             const label = button.querySelector('.column-label').textContent;
-            button.title = active ? (ascending ? `按${label}降序排序` : '取消排序，恢复默认顺序') : `按${label}升序排序`;
+            button.title = active ? (ascending ? `按「${label}」倒序` : '关闭排序，恢复默认顺序') : `启用「${label}」排序`;
         }
+    }
+
+    /** 返回列的排序值，并按读、写、读写的顺序排列访问类别。 */
+    function sortValue(item, key) {
+        if (key === 'access') {
+            return accessTypes[item.access]?.order;
+        }
+        return key === 'text' ? item.text.trimStart() : item[key];
     }
 
     /** 按当前列比较引用值，并将空值保留在有值的结果之后。 */
     function compareItems(left, right) {
         const key = ui.sortKey;
-        const a = key === 'text' ? left.text.trimStart() : left[key];
-        const b = key === 'text' ? right.text.trimStart() : right[key];
+        const a = sortValue(left, key);
+        const b = sortValue(right, key);
         const aEmpty = a === undefined || a === '';
         const bEmpty = b === undefined || b === '';
         if (aEmpty || bEmpty) {
@@ -425,10 +446,10 @@
                         const indentation = item.text.length - text.length;
                         const ranges = item.highlightRanges?.map((range) => ({ start: Math.max(0, range.start - indentation), end: Math.max(0, range.end - indentation) }));
                         window.smartReferenceSyntax.append(cell, text, Math.max(0, item.highlightStart - indentation), Math.max(0, item.highlightEnd - indentation), item.language, item.file, ranges);
-                    } else if (column.access) {
-                        const value = item[column.key];
-                        cell.textContent = value === undefined ? '—' : (value ? '✓' : '');
-                        cell.title = value === undefined ? '读写类型未知' : (value ? column.label : `未标记为${column.label}`);
+                    } else if (column.key === 'access') {
+                        const access = accessTypes[item.access];
+                        cell.textContent = access?.label ?? '—';
+                        cell.title = access?.label ?? '读写类型未知';
                         cell.setAttribute('aria-label', cell.title);
                     } else {
                         cell.textContent = String(item[column.key] || '');

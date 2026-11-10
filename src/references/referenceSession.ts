@@ -450,8 +450,7 @@ export class ReferenceSession implements vscode.Disposable {
             if (record.item.uri !== document.uri.toString() || record.invalid) {
                 continue;
             }
-            record.item.read = undefined;
-            record.item.write = undefined;
+            record.item.access = undefined;
             const originalRanges: vscode.Range[] = (record.item.highlightRanges ?? [{ start: record.item.highlightStart, end: record.item.highlightEnd }])
                 .map((range): vscode.Range => new vscode.Range(record.item.line - 1, range.start, record.item.line - 1, range.end));
             const mappedRanges: (vscode.Range | undefined)[] = originalRanges.map((range): vscode.Range | undefined => trackRange(range, event.contentChanges));

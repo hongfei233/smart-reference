@@ -3,6 +3,9 @@ import * as vscode from 'vscode';
 /** 定义精确引用和快速文本匹配两种搜索模式。 */
 export type ReferenceSearchMode = 'references' | 'text';
 
+/** 表示语言服务确认的引用读写类别。 */
+export type ReferenceAccess = 'read' | 'write' | 'readWrite';
+
 /** 保存引用查询的原始符号位置。 */
 export interface ReferenceTarget {
     uri: vscode.Uri;
@@ -29,8 +32,7 @@ export interface ReferenceItem {
     highlightRanges?: { start: number; end: number }[];
     member: string;
     type: string;
-    read?: boolean;
-    write?: boolean;
+    access?: ReferenceAccess;
 }
 
 /** 保存引用跳转所需的文档版本和真实范围。 */
